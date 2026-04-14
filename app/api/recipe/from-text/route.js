@@ -17,10 +17,15 @@ export async function POST(request) {
     const prompt = `Give me a recipe using: ${ingredientList}. Reply ONLY with JSON in this exact format:
 {"title":"Name","ingredients":["amount item",...],"instructions":["Step 1",...]}`;
 
-    const geminiData = await callGeminiWithRotation({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
-    });
+    const customKey = request.headers.get("x-custom-gemini-key");
+
+    const geminiData = await callGeminiWithRotation(
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
+      },
+      customKey
+    );
 
     const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const cleaned = rawText.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();

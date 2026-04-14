@@ -2,14 +2,22 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import Link from "next/link";
+import { useSession, signOut } from "next-auth/react";
+import { useRouter } from "next/navigation";
 
 const API_BASE = "/api/recipe";
+const MAX_HISTORY = 10;
 
-async function fetchFromImageAPI(file) {
+async function fetchFromImageAPI(file, customKey) {
   const formData = new FormData();
   formData.append("file", file);
+  
+  const headers = {};
+  if (customKey) headers["x-custom-gemini-key"] = customKey;
+
   const response = await fetch(`${API_BASE}/from-image`, {
     method: "POST",
+    headers,
     body: formData,
     signal: AbortSignal.timeout(30000),
   });
@@ -18,10 +26,13 @@ async function fetchFromImageAPI(file) {
   return data;
 }
 
-async function fetchFromTextAPI(ingredientsList) {
+async function fetchFromTextAPI(ingredientsList, customKey) {
+  const headers = { "Content-Type": "application/json" };
+  if (customKey) headers["x-custom-gemini-key"] = customKey;
+
   const response = await fetch(`${API_BASE}/from-text`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ ingredients: ingredientsList }),
     signal: AbortSignal.timeout(30000),
   });
@@ -42,7 +53,42 @@ const TEXT_ANALYSIS_MESSAGES = [
   "🍽️ Preparing your recipe...",
 ];
 
+function getHistoryKey(userId) {
+  return `chefy-history-${userId}`;
+}
+
+function loadHistory(userId) {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(getHistoryKey(userId)) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(userId, history) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(getHistoryKey(userId), JSON.stringify(history));
+}
+
+function addToHistory(userId, recipe, method) {
+  const history = loadHistory(userId);
+  const entry = {
+    id: Date.now(),
+    title: recipe.title,
+    method,
+    timestamp: new Date().toISOString(),
+    recipe,
+  };
+  const updated = [entry, ...history].slice(0, MAX_HISTORY);
+  saveHistory(userId, updated);
+  return updated;
+}
+
 export default function AiChef() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+
   const [theme, setTheme] = useState("dark");
   const [activeTab, setActiveTab] = useState("image-tab");
   const [isDragOver, setIsDragOver] = useState(false);
@@ -55,23 +101,51 @@ export default function AiChef() {
   const [recipeKey, setRecipeKey] = useState(0);
   const [statusMsg, setStatusMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [history, setHistory] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [customKey, setCustomKey] = useState("");
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   const imageInputRef = useRef(null);
   const recipeResultRef = useRef(null);
 
+  // Redirect if not authenticated
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.replace("/auth");
+    }
+  }, [status, router]);
+
+  // Load theme and custom key
   useEffect(() => {
     const saved = localStorage.getItem("ai-chef-theme");
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     const initial = saved ? saved : prefersDark ? "dark" : "light";
     setTheme(initial);
     document.documentElement.setAttribute("data-theme", initial);
+
+    const savedKey = localStorage.getItem("chefy-custom-api-key");
+    if (savedKey) setCustomKey(savedKey);
   }, []);
+
+  // Load history when user is ready
+  useEffect(() => {
+    if (session?.user?.id) {
+      setHistory(loadHistory(session.user.id));
+    }
+  }, [session?.user?.id]);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
     document.documentElement.setAttribute("data-theme", next);
     localStorage.setItem("ai-chef-theme", next);
+  };
+
+  const saveCustomKey = (key) => {
+    setCustomKey(key);
+    localStorage.setItem("chefy-custom-api-key", key);
   };
 
   const switchTab = (tab) => {
@@ -117,9 +191,13 @@ export default function AiChef() {
     setErrorMsg("");
     const clearStatus = runStatusMessages(ANALYSIS_MESSAGES);
     try {
-      const data = await fetchFromImageAPI(currentFile);
+      const data = await fetchFromImageAPI(currentFile, customKey);
       setRecipe(data);
       setRecipeKey((k) => k + 1);
+      if (session?.user?.id) {
+        const updated = addToHistory(session.user.id, data, "📸 Image");
+        setHistory(updated);
+      }
     } catch (error) {
       setErrorMsg(error.message);
     } finally {
@@ -141,9 +219,13 @@ export default function AiChef() {
     setErrorMsg("");
     const clearStatus = runStatusMessages(TEXT_ANALYSIS_MESSAGES);
     try {
-      const data = await fetchFromTextAPI(ingredientsArr);
+      const data = await fetchFromTextAPI(ingredientsArr, customKey);
       setRecipe(data);
       setRecipeKey((k) => k + 1);
+      if (session?.user?.id) {
+        const updated = addToHistory(session.user.id, data, "✍️ Text");
+        setHistory(updated);
+      }
     } catch (error) {
       setErrorMsg(error.message);
     } finally {
@@ -153,11 +235,40 @@ export default function AiChef() {
     }
   };
 
+  const handleViewHistoryRecipe = (entry) => {
+    setRecipe(entry.recipe);
+    setRecipeKey((k) => k + 1);
+    setHistoryOpen(false);
+    setErrorMsg("");
+  };
+
+  const handleClearHistory = () => {
+    if (!session?.user?.id) return;
+    saveHistory(session.user.id, []);
+    setHistory([]);
+  };
+
   useEffect(() => {
     if (recipe && recipeResultRef.current) {
       recipeResultRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [recipe, recipeKey]);
+
+  // Show loading screen while checking auth
+  if (status === "loading" || status === "unauthenticated") {
+    return (
+      <div className="auth-loading-screen">
+        <div className="auth-loader-ring"></div>
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  const user = session?.user;
+  const formatDate = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  };
 
   return (
     <>
@@ -179,24 +290,81 @@ export default function AiChef() {
       {/* Nav Bar */}
       <nav className="chef-nav">
         <Link href="/" className="chef-nav-logo">
-          🍳 AI Chef
+          🍳 Chefy.AI
         </Link>
-        <button
-          className="theme-toggle chef-nav-toggle"
-          aria-label="Toggle Dark/Light Mode"
-          onClick={toggleTheme}
-        >
-          <span className="icon-sun">☀️</span>
-          <span className="icon-moon">🌙</span>
-        </button>
+
+        <div className="chef-nav-right">
+          {/* History Button */}
+          <button
+            className="chef-history-btn"
+            onClick={() => setHistoryOpen(true)}
+            title="View Recipe History"
+          >
+            📖 History
+            {history.length > 0 && (
+              <span className="history-badge">{history.length}</span>
+            )}
+          </button>
+
+          {/* Settings Button */}
+          <button
+            className="chef-history-btn"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+          >
+            ⚙️ Settings
+          </button>
+
+          {/* Theme Toggle */}
+          <button
+            className="theme-toggle chef-nav-toggle"
+            aria-label="Toggle Dark/Light Mode"
+            onClick={toggleTheme}
+          >
+            <span className="icon-sun">☀️</span>
+            <span className="icon-moon">🌙</span>
+          </button>
+
+          {/* User Avatar / Menu */}
+          <div className="user-menu-wrap">
+            <button
+              className="user-avatar-btn"
+              onClick={() => setShowUserMenu((v) => !v)}
+              title={user?.name}
+            >
+              {user?.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={user.image} alt={user.name} className="user-avatar-img" referrerPolicy="no-referrer" />
+              ) : (
+                <span className="user-avatar-fallback">
+                  {user?.name?.[0]?.toUpperCase() || "U"}
+                </span>
+              )}
+            </button>
+            {showUserMenu && (
+              <div className="user-dropdown">
+                <div className="user-dropdown-info">
+                  <p className="user-dropdown-name">{user?.name}</p>
+                  <p className="user-dropdown-email">{user?.email}</p>
+                </div>
+                <button
+                  className="user-dropdown-signout"
+                  onClick={() => signOut({ callbackUrl: "/auth" })}
+                >
+                  🚪 Sign Out
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </nav>
 
       <main className="container">
         <header className="hero">
           <h1>
-            AI <span className="text-gradient">Chef</span>
+            Chefy<span className="text-gradient">.AI</span>
           </h1>
-          <p>From pixels to plates. Discover extraordinary recipes crafted by AI.</p>
+          <p>From pixels to plates — extraordinary recipes crafted by AI, just for you.</p>
         </header>
 
         <section className="glass-panel main-panel">
@@ -331,6 +499,110 @@ export default function AiChef() {
           </section>
         )}
       </main>
+
+      {/* ── History Drawer ── */}
+      {historyOpen && (
+        <div className="history-overlay" onClick={() => setHistoryOpen(false)}>
+          <div className="history-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="history-drawer-header">
+              <h2>📖 Recipe History</h2>
+              <div className="history-header-actions">
+                {history.length > 0 && (
+                  <button className="history-clear-btn" onClick={handleClearHistory}>
+                    🗑️ Clear
+                  </button>
+                )}
+                <button className="history-close-btn" onClick={() => setHistoryOpen(false)}>
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="history-list">
+              {history.length === 0 ? (
+                <div className="history-empty">
+                  <div className="history-empty-icon">🍽️</div>
+                  <p>No recipes yet!</p>
+                  <p className="history-empty-sub">Generate your first recipe to see it here.</p>
+                </div>
+              ) : (
+                history.map((entry) => (
+                  <div key={entry.id} className="history-card">
+                    <div className="history-card-top">
+                      <span className="history-method-badge">{entry.method}</span>
+                      <span className="history-date">{formatDate(entry.timestamp)}</span>
+                    </div>
+                    <h3 className="history-card-title">{entry.title}</h3>
+                    <p className="history-card-meta">
+                      {entry.recipe.ingredients.length} ingredients · {entry.recipe.instructions.length} steps
+                    </p>
+                    <button
+                      className="history-view-btn"
+                      onClick={() => handleViewHistoryRecipe(entry)}
+                    >
+                      View Recipe →
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Settings Drawer ── */}
+      {settingsOpen && (
+        <div className="history-overlay" onClick={() => setSettingsOpen(false)}>
+          <div className="history-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="history-drawer-header">
+              <h2>⚙️ API Settings</h2>
+              <div className="history-header-actions">
+                <button className="history-close-btn" onClick={() => setSettingsOpen(false)}>
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="history-list" style={{ padding: "1.5rem" }}>
+              <h3 style={{ marginBottom: "1rem", fontSize: "1.1rem" }}>Custom Gemini API Key</h3>
+              <p style={{ marginBottom: "1.5rem", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
+                Add your own API key to bypass system quotas. Your key will be saved locally in your browser and sent securely to generate recipes.
+              </p>
+              
+              <div className="input-area" style={{ marginTop: 0 }}>
+                <label htmlFor="custom-api-key">API Key</label>
+                <input
+                  id="custom-api-key"
+                  type="password"
+                  placeholder="AIzaSy..."
+                  value={customKey}
+                  onChange={(e) => saveCustomKey(e.target.value)}
+                  style={{
+                    width: "100%", padding: "0.8rem", borderRadius: "12px",
+                    border: "1px solid var(--border-color)", background: "var(--bg-card)",
+                    color: "var(--text-primary)", outline: "none", fontSize: "0.9rem"
+                  }}
+                />
+              </div>
+              
+              <div style={{ marginTop: "1rem", display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  className="generate-btn"
+                  style={{ width: "auto", padding: "0.8rem 1.5rem", borderRadius: "10px", fontSize: "0.9rem" }}
+                  onClick={() => setSettingsOpen(false)}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Click outside to close user menu */}
+      {showUserMenu && (
+        <div className="menu-backdrop" onClick={() => setShowUserMenu(false)} />
+      )}
     </>
   );
 }

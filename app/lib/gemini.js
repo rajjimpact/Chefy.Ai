@@ -25,17 +25,23 @@ function getKeys() {
 /**
  * Call the Gemini API with automatic key rotation on 429 errors.
  *
- * @param {object} requestBody  - The full Gemini request body (contents, generationConfig, …)
+ * @param {object} requestBody  - The full Gemini request body
+ * @param {string} customKey    - Optional user-provided API key to prioritize
  * @returns {Promise<object>}   - Parsed Gemini JSON response
  * @throws {Error}              - If all keys fail
  */
-export async function callGeminiWithRotation(requestBody) {
-  const keys = getKeys();
+export async function callGeminiWithRotation(requestBody, customKey = null) {
+  let keys = getKeys();
+  if (customKey && customKey.trim() !== "") {
+    // Only add if not already the first element
+    keys = [customKey.trim(), ...keys.filter(k => k !== customKey.trim())];
+  }
+  
   let lastError = null;
 
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
-    const keyLabel = `Key ${i + 1}`;
+    const keyLabel = i === 0 && customKey ? "Custom Key" : `Key ${i + 1}`;
 
     try {
       console.log(`[Gemini] Trying ${keyLabel}...`);
