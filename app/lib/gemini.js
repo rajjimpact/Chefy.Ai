@@ -10,14 +10,21 @@ const GEMINI_API_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
 function getKeys() {
-  const keys = [
+  const raw = [
     process.env.GEMINI_API_KEY_1,
     process.env.GEMINI_API_KEY_2,
     process.env.GEMINI_API_KEY_3,
-  ].filter((k) => k && k.trim() !== "");
+  ];
+
+  // Filter valid keys — must be non-empty and start with "AIzaSy"
+  const keys = raw.filter((k) => k && k.trim().startsWith("AIzaSy"));
+
+  console.log(`[Gemini] ${keys.length} valid API key(s) configured out of ${raw.filter(Boolean).length} set.`);
 
   if (keys.length === 0) {
-    throw new Error("No Gemini API keys configured in .env.local");
+    throw new Error(
+      "No valid Gemini API keys configured. Please add your API key in the ⚙️ Settings panel."
+    );
   }
   return keys;
 }
@@ -91,7 +98,7 @@ export async function callGeminiWithRotation(requestBody, customKey = null) {
   // All keys exhausted
   const msg =
     lastError?.statusCode === 429
-      ? "All API keys have reached their quota limit. Please try again later."
+      ? "All API keys have reached their daily quota. Click ⚙️ Settings and add your own Gemini API key to continue."
       : lastError?.message || "All API keys failed.";
   throw new Error(msg);
 }

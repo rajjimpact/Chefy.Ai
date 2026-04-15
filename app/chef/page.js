@@ -349,7 +349,11 @@ export default function AiChef() {
                 </div>
                 <button
                   className="user-dropdown-signout"
-                  onClick={() => signOut({ callbackUrl: "/auth" })}
+                  onClick={async () => {
+                    setShowUserMenu(false);
+                    await signOut({ redirect: false });
+                    window.location.href = "/auth";
+                  }}
                 >
                   🚪 Sign Out
                 </button>

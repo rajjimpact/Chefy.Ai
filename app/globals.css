@@ -503,7 +503,7 @@ header p {
 .chef-nav {
     position: sticky;
     top: 0;
-    z-index: 100;
+    z-index: 250;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1030,7 +1030,7 @@ header p {
 .menu-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 150;
+    z-index: 149;
 }
 
 /* ══════════════════════════════════════════════
