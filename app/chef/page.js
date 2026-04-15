@@ -568,9 +568,17 @@ export default function AiChef() {
             </div>
 
             <div className="history-list" style={{ padding: "1.5rem" }}>
-              <h3 style={{ marginBottom: "1rem", fontSize: "1.1rem" }}>Custom Gemini API Key</h3>
-              <p style={{ marginBottom: "1.5rem", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
-                Add your own API key to bypass system quotas. Your key will be saved locally in your browser and sent securely to generate recipes.
+              <h3 style={{ marginBottom: "1rem", fontSize: "1.1rem" }}>Custom API Key</h3>
+              <p style={{ marginBottom: "0.75rem", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
+                Add your own key to bypass system quota limits. Both key types are supported:
+              </p>
+              <p style={{ marginBottom: "0.5rem", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                🟢 <strong>Groq</strong> (Recommended — FREE, 14,400 req/day): Get key at{" "}
+                <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>console.groq.com</a>
+              </p>
+              <p style={{ marginBottom: "1.5rem", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                🔵 <strong>Gemini</strong> (1,500 req/day): Get key at{" "}
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>aistudio.google.com</a>
               </p>
               
               <div className="input-area" style={{ marginTop: 0 }}>
@@ -578,7 +586,7 @@ export default function AiChef() {
                 <input
                   id="custom-api-key"
                   type="password"
-                  placeholder="AIzaSy..."
+                  placeholder="gsk_... (Groq) or AIzaSy... (Gemini)"
                   value={customKey}
                   onChange={(e) => saveCustomKey(e.target.value)}
                   style={{
