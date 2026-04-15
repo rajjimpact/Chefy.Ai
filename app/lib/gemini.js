@@ -1,27 +1,31 @@
 /**
- * Gemini API helper — tries multiple API versions and model names.
+ * Gemini API helper — tries multiple models in order.
+ * New AI Studio keys (2025) only support gemini-2.0-* models.
+ * gemini-1.5-* returns 404 for these keys.
  */
 
-// Try v1 first, then v1beta (different models available on each)
-const API_VERSIONS = ["v1", "v1beta"];
+// Only v1beta — new AI Studio keys work here
+const API_VERSION = "v1beta";
 
-// Models to try in order (with common aliases)
+// Models tried in order:
+// 1. gemini-2.0-flash-lite  — 30 RPM (highest free quota)
+// 2. gemini-2.0-flash       — 15 RPM (standard)
+// 3. gemini-2.0-flash-exp   — experimental (different quota pool)
 const MODELS = [
+  "gemini-2.0-flash-lite",
   "gemini-2.0-flash",
-  "gemini-1.5-flash",
-  "gemini-1.5-flash-latest",
-  "gemini-1.5-flash-001",
+  "gemini-2.0-flash-exp",
 ];
 
-function makeApiUrl(version, model) {
-  return `https://generativelanguage.googleapis.com/${version}/models/${model}:generateContent`;
+function makeApiUrl(model) {
+  return `https://generativelanguage.googleapis.com/${API_VERSION}/models/${model}:generateContent`;
 }
 
 /**
  * Makes ONE Gemini API call with a specific key, version, and model.
  */
-async function callGemini(key, version, model, requestBody) {
-  const url = `${makeApiUrl(version, model)}?key=${key}`;
+async function callGemini(key, model, requestBody) {
+  const url = `${makeApiUrl(model)}?key=${key}`;
 
   let response;
   try {
@@ -55,35 +59,33 @@ async function callGemini(key, version, model, requestBody) {
  * Returns { ok: true, data } or { ok: false, status, message }
  */
 async function tryKey(key, label, requestBody) {
-  for (const version of API_VERSIONS) {
-    for (const model of MODELS) {
-      const result = await callGemini(key, version, model, requestBody);
+  for (const model of MODELS) {
+    const result = await callGemini(key, model, requestBody);
 
-      if (result.ok) {
-        console.log(`[Gemini] ✓ ${label} success: ${version}/${model}`);
-        return { ok: true, data: result.data };
-      }
-
-      const { status, message } = result;
-      console.warn(`[Gemini] ✗ ${label}/${version}/${model}: ${status} — ${String(message).slice(0, 80)}`);
-
-      // 404 = model not found on this version → try next version/model
-      if (status === 404) continue;
-
-      // 429 = quota exceeded → try next model (might have different quota)
-      if (status === 429) continue;
-
-      // 400/401/403 = auth/key issue → skip remaining models for this key
-      if (status === 400 || status === 401 || status === 403) {
-        return { ok: false, status, message };
-      }
-
-      // Other errors → try next model
-      continue;
+    if (result.ok) {
+      console.log(`[Gemini] ✓ ${label}/${model} success`);
+      return { ok: true, data: result.data };
     }
+
+    const { status, message } = result;
+    console.warn(`[Gemini] ✗ ${label}/${model}: ${status} — ${String(message).slice(0, 80)}`);
+
+    // 404 = model unavailable → try next model
+    if (status === 404) continue;
+
+    // 429 = rate/quota limit → try next model (different quota pool)
+    if (status === 429) continue;
+
+    // 400/401/403 = bad key → stop trying models, signal to skip this key
+    if (status === 400 || status === 401 || status === 403) {
+      return { ok: false, status, message };
+    }
+
+    // Other errors → try next model
+    continue;
   }
 
-  return { ok: false, status: 429, message: "All models exhausted for this key" };
+  return { ok: false, status: 429, message: "All models quota-limited for this key" };
 }
 
 /**
