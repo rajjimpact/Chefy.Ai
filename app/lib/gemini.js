@@ -1,19 +1,27 @@
 /**
- * Gemini API helper — simple, direct, always tries all available keys.
+ * Gemini API helper — tries multiple API versions and model names.
  */
 
-const GEMINI_API_BASE =
-  "https://generativelanguage.googleapis.com/v1beta/models";
+// Try v1 first, then v1beta (different models available on each)
+const API_VERSIONS = ["v1", "v1beta"];
 
-// Models to try in order
-const MODELS = ["gemini-1.5-flash", "gemini-2.0-flash"];
+// Models to try in order (with common aliases)
+const MODELS = [
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-latest",
+  "gemini-1.5-flash-001",
+];
+
+function makeApiUrl(version, model) {
+  return `https://generativelanguage.googleapis.com/${version}/models/${model}:generateContent`;
+}
 
 /**
- * Makes ONE Gemini API call with a specific key + model.
- * Returns { ok, data, status, message }
+ * Makes ONE Gemini API call with a specific key, version, and model.
  */
-async function callGemini(key, model, requestBody) {
-  const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${key}`;
+async function callGemini(key, version, model, requestBody) {
+  const url = `${makeApiUrl(version, model)}?key=${key}`;
 
   let response;
   try {
@@ -31,7 +39,7 @@ async function callGemini(key, model, requestBody) {
   try {
     body = await response.json();
   } catch {
-    return { ok: false, status: response.status, message: "Invalid JSON from Gemini API" };
+    return { ok: false, status: response.status, message: "Invalid response from Gemini API" };
   }
 
   if (response.ok) {
@@ -43,87 +51,92 @@ async function callGemini(key, model, requestBody) {
 }
 
 /**
- * Tries each API key against each model until one succeeds.
- * Never stops early — always exhausts all keys before giving up.
- *
- * @param {object} requestBody - Gemini request body
- * @param {string|null} customKey - Optional key from user (tried first)
+ * Trys all versions + models for a single key until one succeeds.
+ * Returns { ok: true, data } or { ok: false, status, message }
+ */
+async function tryKey(key, label, requestBody) {
+  for (const version of API_VERSIONS) {
+    for (const model of MODELS) {
+      const result = await callGemini(key, version, model, requestBody);
+
+      if (result.ok) {
+        console.log(`[Gemini] ✓ ${label} success: ${version}/${model}`);
+        return { ok: true, data: result.data };
+      }
+
+      const { status, message } = result;
+      console.warn(`[Gemini] ✗ ${label}/${version}/${model}: ${status} — ${String(message).slice(0, 80)}`);
+
+      // 404 = model not found on this version → try next version/model
+      if (status === 404) continue;
+
+      // 429 = quota exceeded → try next model (might have different quota)
+      if (status === 429) continue;
+
+      // 400/401/403 = auth/key issue → skip remaining models for this key
+      if (status === 400 || status === 401 || status === 403) {
+        return { ok: false, status, message };
+      }
+
+      // Other errors → try next model
+      continue;
+    }
+  }
+
+  return { ok: false, status: 429, message: "All models exhausted for this key" };
+}
+
+/**
+ * Main export: tries each key in order (custom key first).
  */
 export async function callGeminiWithRotation(requestBody, customKey = null) {
-  // Build key list — custom key goes FIRST
+  // Build key list — custom key goes first
   const keys = [];
 
   if (customKey && customKey.trim()) {
     keys.push({ key: customKey.trim(), label: "Custom" });
   }
 
-  const envKeys = [
-    process.env.GEMINI_API_KEY_1,
-    process.env.GEMINI_API_KEY_2,
-    process.env.GEMINI_API_KEY_3,
+  const envEntries = [
+    [process.env.GEMINI_API_KEY_1, "Env-1"],
+    [process.env.GEMINI_API_KEY_2, "Env-2"],
+    [process.env.GEMINI_API_KEY_3, "Env-3"],
   ];
 
-  for (let i = 0; i < envKeys.length; i++) {
-    const k = envKeys[i];
-    if (k && k.trim() && k.trim().startsWith("AIzaSy")) {
+  for (const [k, label] of envEntries) {
+    if (k && k.trim().startsWith("AIzaSy")) {
       const trimmed = k.trim();
-      // Don't duplicate if same as custom key
       if (!keys.some((x) => x.key === trimmed)) {
-        keys.push({ key: trimmed, label: `System-${i + 1}` });
+        keys.push({ key: trimmed, label });
       }
     }
   }
 
-  console.log(`[Gemini] Keys to try: ${keys.map((k) => k.label).join(", ") || "NONE"}`);
+  console.log(`[Gemini] Attempting with keys: [${keys.map((k) => k.label).join(", ")}]`);
 
   if (keys.length === 0) {
     throw new Error(
-      "No API keys found. Open ⚙️ Settings and paste a Gemini API key from aistudio.google.com"
+      "No API keys found. Go to aistudio.google.com → Get API key → paste in ⚙️ Settings"
     );
   }
-
-  const errors = [];
 
   for (const { key, label } of keys) {
-    for (const model of MODELS) {
-      console.log(`[Gemini] Trying ${label} + ${model}...`);
-      const result = await callGemini(key, model, requestBody);
+    const result = await tryKey(key, label, requestBody);
 
-      if (result.ok) {
-        console.log(`[Gemini] ✓ Success: ${label} + ${model}`);
-        return result.data;
-      }
+    if (result.ok) return result.data;
 
-      console.warn(`[Gemini] ✗ ${label}/${model}: ${result.status} — ${result.message}`);
-      errors.push(`[${label}/${model}] ${result.status}: ${result.message}`);
-
-      // If it's an auth/key error, no point trying other models with same key
-      if (result.status === 400 || result.status === 401 || result.status === 403) {
-        break; // skip remaining models for THIS key, try next key
-      }
+    // Auth errors (bad key) → skip to next key
+    if (result.status === 400 || result.status === 401 || result.status === 403) {
+      console.warn(`[Gemini] Skipping ${label} (auth error ${result.status})`);
+      continue;
     }
+
+    // For quota errors, still try other keys
+    continue;
   }
 
-  // All keys + models failed
-  console.error("[Gemini] All attempts failed:\n" + errors.join("\n"));
-
-  // Show the most relevant error (from the custom key if present, else first error)
-  const firstError = errors[0] || "Unknown error";
-  const isAuthError = errors.some((e) => /expired|invalid|forbidden|unauthorized/i.test(e));
-  const isQuotaError = errors.some((e) => /429|quota/i.test(e));
-
-  if (isAuthError) {
-    throw new Error(
-      "API key error: " +
-        (errors[0]?.split(": ").slice(2).join(": ") || "Invalid or expired key") +
-        " — Try a new key from aistudio.google.com in ⚙️ Settings"
-    );
-  }
-  if (isQuotaError) {
-    throw new Error(
-      "All API keys hit quota. Open ⚙️ Settings and paste a fresh key from aistudio.google.com"
-    );
-  }
-
-  throw new Error(firstError);
+  // All keys + all models failed
+  throw new Error(
+    "All API keys failed. Please go to aistudio.google.com, create a new API key, and add it in ⚙️ Settings."
+  );
 }
