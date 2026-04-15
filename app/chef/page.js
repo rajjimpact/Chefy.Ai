@@ -8,10 +8,39 @@ import { useRouter } from "next/navigation";
 const API_BASE = "/api/recipe";
 const MAX_HISTORY = 10;
 
+/** Resize an image File to max 800px on longest side, JPEG @75% quality.
+ *  Returns a new File. This cuts a 5MB photo to ~120KB — well within Groq's limit. */
+async function resizeImageFile(file, maxPx = 800, quality = 0.75) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const w = Math.round(img.width  * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width  = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob(
+        (blob) => resolve(new File([blob], "image.jpg", { type: "image/jpeg" })),
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); }; // fallback: original
+    img.src = url;
+  });
+}
+
 async function fetchFromImageAPI(file, customKey) {
+  // Resize before upload — phone photos can be 5-10MB, Groq vision limit is ~4MB
+  const compressed = await resizeImageFile(file);
+
   const formData = new FormData();
-  formData.append("file", file);
-  
+  formData.append("file", compressed);
+
   const headers = {};
   if (customKey) headers["x-custom-gemini-key"] = customKey;
 
@@ -19,7 +48,7 @@ async function fetchFromImageAPI(file, customKey) {
     method: "POST",
     headers,
     body: formData,
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(45000), // vision is slower
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Failed to generate recipe");

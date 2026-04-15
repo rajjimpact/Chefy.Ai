@@ -10,8 +10,14 @@
 const GEMINI_MODELS = ["gemini-2.0-flash-lite", "gemini-2.0-flash"];
 
 // ── Groq config ────────────────────────────────────────────────
-const GROQ_TEXT_MODEL   = "llama-3.3-70b-versatile";      // 14,400 RPD free
-const GROQ_VISION_MODEL = "llama-3.2-11b-vision-preview"; //  7,000 RPD free
+const GROQ_TEXT_MODEL = "llama-3.3-70b-versatile";      // 14,400 RPD free
+
+// Groq vision models tried in order (image must come FIRST in content)
+const GROQ_VISION_MODELS = [
+  "meta-llama/llama-4-scout-17b-16e-instruct", // Llama 4 Scout — supports vision
+  "llama-3.2-90b-vision-preview",               // Llama 3.2 90B vision
+  "llama-3.2-11b-vision-preview",               // Llama 3.2 11B vision
+];
 
 // ── Utilities ──────────────────────────────────────────────────
 
@@ -57,21 +63,25 @@ async function callGeminiKey(key, body) {
 // ── Groq API ───────────────────────────────────────────────────
 
 /** Convert Gemini-format request body → Groq (OpenAI) request body */
-function toGroqBody(body) {
+function toGroqBody(body, visionModel = null) {
   const parts    = body?.contents?.[0]?.parts || [];
   const textPart = parts.find((p) => p.text)?.text || "";
   const imgPart  = parts.find((p) => p.inlineData);
 
   if (imgPart) {
+    // ⚠️ Image MUST come first for Llama vision models
     return {
-      model: GROQ_VISION_MODEL,
+      model: visionModel || GROQ_VISION_MODELS[0],
       messages: [{
         role: "user",
         content: [
-          { type: "text", text: textPart },
-          { type: "image_url", image_url: {
+          {
+            type: "image_url",
+            image_url: {
               url: `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`,
-          }},
+            },
+          },
+          { type: "text", text: textPart },
         ],
       }],
     };
@@ -84,35 +94,50 @@ function toGroqBody(body) {
 }
 
 async function callGroqKey(key, body) {
-  const groqBody = toGroqBody(body);
-  try {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({ ...groqBody, temperature: 0.7, max_tokens: 1024 }),
-      cache: "no-store",
-    });
+  const parts   = body?.contents?.[0]?.parts || [];
+  const hasImage = parts.some((p) => p.inlineData);
 
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const msg = data?.error?.message || `HTTP ${res.status}`;
-      console.warn(`[AI] Groq: ${res.status} — ${String(msg).slice(0,80)}`);
-      return { ok: false, status: res.status, message: msg };
+  // For vision, try each model in order; for text, just call once
+  const modelsToTry = hasImage ? GROQ_VISION_MODELS : [GROQ_TEXT_MODEL];
+
+  for (const model of modelsToTry) {
+    const groqBody = toGroqBody(body, model);
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({ ...groqBody, temperature: 0.7, max_tokens: 1024 }),
+        cache: "no-store",
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data?.error?.message || `HTTP ${res.status}`;
+        console.warn(`[AI] Groq/${model}: ${res.status} — ${String(msg).slice(0,80)}`);
+        // 404 = model not found → try next vision model
+        if (res.status === 404) continue;
+        // Auth errors → stop
+        if (res.status === 401 || res.status === 403) return { ok: false, status: res.status, message: msg };
+        // Other errors → try next model
+        continue;
+      }
+
+      const text = data.choices?.[0]?.message?.content || "";
+      console.log(`[AI] ✓ Groq/${model}`);
+      return {
+        ok: true,
+        data: { candidates: [{ content: { parts: [{ text }] } }] },
+      };
+    } catch (err) {
+      console.warn(`[AI] Groq/${model} error: ${err.message}`);
+      continue;
     }
-
-    // Convert OpenAI response → Gemini-compatible format (routes don't need changes)
-    const text = data.choices?.[0]?.message?.content || "";
-    console.log(`[AI] ✓ Groq/${groqBody.model}`);
-    return {
-      ok: true,
-      data: { candidates: [{ content: { parts: [{ text }] } }] },
-    };
-  } catch (err) {
-    return { ok: false, status: 0, message: err.message };
   }
+
+  return { ok: false, status: 500, message: "All Groq vision models failed" };
 }
 
 // ── Main Export ────────────────────────────────────────────────
