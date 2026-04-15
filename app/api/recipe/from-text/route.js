@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { callGeminiWithRotation } from "../../../lib/gemini";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 export async function POST(request) {
   try {
     const { ingredients } = await request.json();
