@@ -17,8 +17,8 @@ export async function POST(request) {
 
     const ingredientList = ingredients.join(", ");
 
-    const prompt = `Give me a recipe using: ${ingredientList}. Reply ONLY with JSON in this exact format:
-{"title":"Name","ingredients":["amount item",...],"instructions":["Step 1",...]}`;
+    const prompt = `Give me a recipe using: ${ingredientList}. Reply ONLY with JSON in this exact format (no extra text, no markdown):
+{"title":"Name","ingredients":["amount item",...],"instructions":["Step 1",...],"nutrition":{"calories":"approx kcal per serving","protein":"Xg","carbs":"Xg","fat":"Xg","fiber":"Xg","keyNutrients":["Vitamin C","Iron","Calcium"]}}`;
 
     const customKey = request.headers.get("x-custom-gemini-key");
 

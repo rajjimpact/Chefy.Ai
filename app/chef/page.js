@@ -8,8 +8,7 @@ import { useRouter } from "next/navigation";
 const API_BASE = "/api/recipe";
 const MAX_HISTORY = 10;
 
-/** Resize an image File to max 800px on longest side, JPEG @75% quality.
- *  Returns a new File. This cuts a 5MB photo to ~120KB — well within Groq's limit. */
+/** Resize an image File to max 800px on longest side, JPEG @75% quality. */
 async function resizeImageFile(file, maxPx = 800, quality = 0.75) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -29,26 +28,22 @@ async function resizeImageFile(file, maxPx = 800, quality = 0.75) {
         quality
       );
     };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); }; // fallback: original
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
     img.src = url;
   });
 }
 
 async function fetchFromImageAPI(file, customKey) {
-  // Resize before upload — phone photos can be 5-10MB, Groq vision limit is ~4MB
   const compressed = await resizeImageFile(file);
-
   const formData = new FormData();
   formData.append("file", compressed);
-
   const headers = {};
   if (customKey) headers["x-custom-gemini-key"] = customKey;
-
   const response = await fetch(`${API_BASE}/from-image`, {
     method: "POST",
     headers,
     body: formData,
-    signal: AbortSignal.timeout(45000), // vision is slower
+    signal: AbortSignal.timeout(45000),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Failed to generate recipe");
@@ -58,7 +53,6 @@ async function fetchFromImageAPI(file, customKey) {
 async function fetchFromTextAPI(ingredientsList, customKey) {
   const headers = { "Content-Type": "application/json" };
   if (customKey) headers["x-custom-gemini-key"] = customKey;
-
   const response = await fetch(`${API_BASE}/from-text`, {
     method: "POST",
     headers,
@@ -67,6 +61,20 @@ async function fetchFromTextAPI(ingredientsList, customKey) {
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Failed to generate recipe");
+  return data;
+}
+
+async function fetchExpiryInfo(items, customKey) {
+  const headers = { "Content-Type": "application/json" };
+  if (customKey) headers["x-custom-gemini-key"] = customKey;
+  const response = await fetch("/api/ingredient-expiry", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ ingredients: items }),
+    signal: AbortSignal.timeout(45000),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Failed to get expiry info");
   return data;
 }
 
@@ -80,6 +88,13 @@ const TEXT_ANALYSIS_MESSAGES = [
   "🧠 Analysing ingredients...",
   "✨ Asking Gemini AI...",
   "🍽️ Preparing your recipe...",
+];
+
+const EXPIRY_MESSAGES = [
+  "🔍 Checking your ingredients...",
+  "📅 Calculating shelf life...",
+  "💡 Finding storage tips...",
+  "✅ Almost done...",
 ];
 
 function getHistoryKey(userId) {
@@ -114,6 +129,62 @@ function addToHistory(userId, recipe, method) {
   return updated;
 }
 
+// ── Nutrition Card Component ────────────────────────────────────
+function NutritionCard({ nutrition }) {
+  if (!nutrition) return null;
+  const stats = [
+    { icon: "🔥", label: "Calories", value: nutrition.calories, color: "#f97316" },
+    { icon: "💪", label: "Protein",  value: nutrition.protein,  color: "#8b5cf6" },
+    { icon: "🌾", label: "Carbs",    value: nutrition.carbs,    color: "#06b6d4" },
+    { icon: "🧈", label: "Fat",      value: nutrition.fat,      color: "#f59e0b" },
+    { icon: "🌿", label: "Fiber",    value: nutrition.fiber,    color: "#10b981" },
+  ];
+  return (
+    <div className="nutrition-card cascade-anim delay-2">
+      <h3 className="nutrition-title">🥗 Nutritional Info <span className="nutrition-subtitle">(per serving)</span></h3>
+      <div className="nutrition-grid">
+        {stats.map((s) => (
+          <div key={s.label} className="nutrition-stat" style={{ "--stat-color": s.color }}>
+            <span className="nutrition-stat-icon">{s.icon}</span>
+            <span className="nutrition-stat-value">{s.value || "—"}</span>
+            <span className="nutrition-stat-label">{s.label}</span>
+          </div>
+        ))}
+      </div>
+      {nutrition.keyNutrients && nutrition.keyNutrients.length > 0 && (
+        <div className="nutrition-chips-wrap">
+          <span className="nutrition-chips-label">✨ Key Nutrients:</span>
+          <div className="nutrition-chips">
+            {nutrition.keyNutrients.map((n, i) => (
+              <span key={i} className="nutrition-chip">{n}</span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Expiry Urgency Badge ────────────────────────────────────────
+function UrgencyBadge({ urgency }) {
+  const map = {
+    "use-now":  { label: "Use Now!",  cls: "urgency-now"  },
+    "use-soon": { label: "Use Soon",  cls: "urgency-soon" },
+    "can-wait": { label: "Can Wait",  cls: "urgency-wait" },
+  };
+  const info = map[urgency] || map["can-wait"];
+  return <span className={`urgency-badge ${info.cls}`}>{info.label}</span>;
+}
+
+// ── Category Icon ───────────────────────────────────────────────
+function categoryIcon(cat) {
+  const icons = {
+    Fruit: "🍎", Vegetable: "🥦", Meat: "🥩", Dairy: "🧀",
+    Grain: "🌾", Spice: "🌶️", Other: "🥄",
+  };
+  return icons[cat] || "🥄";
+}
+
 export default function AiChef() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -136,8 +207,18 @@ export default function AiChef() {
   const [customKey, setCustomKey] = useState("");
   const [showUserMenu, setShowUserMenu] = useState(false);
 
+  // Expiry checker state
+  const [expiryItems, setExpiryItems] = useState([]);
+  const [expiryForm, setExpiryForm] = useState({ name: "", purchaseDate: "", quantity: "", type: "fresh" });
+  const [expiryLoading, setExpiryLoading] = useState(false);
+  const [expiryData, setExpiryData] = useState(null);
+  const [expiryError, setExpiryError] = useState("");
+  const [expiryStatus, setExpiryStatus] = useState("");
+  const [expandedExpiry, setExpandedExpiry] = useState({});
+
   const imageInputRef = useRef(null);
   const recipeResultRef = useRef(null);
+  const expiryResultRef = useRef(null);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -153,7 +234,6 @@ export default function AiChef() {
     const initial = saved ? saved : prefersDark ? "dark" : "light";
     setTheme(initial);
     document.documentElement.setAttribute("data-theme", initial);
-
     const savedKey = localStorage.getItem("chefy-custom-api-key");
     if (savedKey) setCustomKey(savedKey);
   }, []);
@@ -180,8 +260,13 @@ export default function AiChef() {
   const switchTab = (tab) => {
     setActiveTab(tab);
     setRecipe(null);
+    setExpiryData(null);
     setErrorMsg("");
+    setExpiryError("");
     setStatusMsg("");
+    setExpiryStatus("");
+    setExpiryItems([]);
+    setExpiryForm({ name: "", purchaseDate: "", quantity: "", type: "fresh" });
   };
 
   const handleFile = useCallback((file) => {
@@ -197,6 +282,16 @@ export default function AiChef() {
     reader.readAsDataURL(file);
   }, []);
 
+  // Remove uploaded image
+  const handleRemoveImage = (e) => {
+    e.stopPropagation();
+    setPreviewSrc(null);
+    setCurrentFile(null);
+    setRecipe(null);
+    setErrorMsg("");
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  };
+
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragOver(false);
@@ -209,6 +304,16 @@ export default function AiChef() {
     const id = setInterval(() => {
       i = (i + 1) % messages.length;
       setStatusMsg(messages[i]);
+    }, intervalMs);
+    return () => clearInterval(id);
+  };
+
+  const runExpiryStatusMessages = (messages, intervalMs = 1100) => {
+    let i = 0;
+    setExpiryStatus(messages[0]);
+    const id = setInterval(() => {
+      i = (i + 1) % messages.length;
+      setExpiryStatus(messages[i]);
     }, intervalMs);
     return () => clearInterval(id);
   };
@@ -264,6 +369,45 @@ export default function AiChef() {
     }
   };
 
+  const handleAddExpiryItem = () => {
+    if (!expiryForm.name.trim()) {
+      alert("Please enter an ingredient name.");
+      return;
+    }
+    setExpiryItems((prev) => [...prev, { ...expiryForm, id: Date.now() }]);
+    setExpiryForm({ name: "", purchaseDate: "", quantity: "", type: "fresh" });
+  };
+
+  const handleRemoveExpiryItem = (id) => {
+    setExpiryItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleCheckExpiry = async () => {
+    if (expiryItems.length === 0) {
+      alert("Please add at least one ingredient to check.");
+      return;
+    }
+    setExpiryLoading(true);
+    setExpiryData(null);
+    setExpiryError("");
+    setExpandedExpiry({});
+    const clearStatus = runExpiryStatusMessages(EXPIRY_MESSAGES);
+    try {
+      const data = await fetchExpiryInfo(expiryItems, customKey);
+      setExpiryData(data);
+    } catch (error) {
+      setExpiryError(error.message);
+    } finally {
+      clearStatus();
+      setExpiryStatus("");
+      setExpiryLoading(false);
+    }
+  };
+
+  const toggleExpiryItem = (idx) => {
+    setExpandedExpiry((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
   const handleViewHistoryRecipe = (entry) => {
     setRecipe(entry.recipe);
     setRecipeKey((k) => k + 1);
@@ -283,7 +427,12 @@ export default function AiChef() {
     }
   }, [recipe, recipeKey]);
 
-  // Show loading screen while checking auth
+  useEffect(() => {
+    if (expiryData && expiryResultRef.current) {
+      expiryResultRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [expiryData]);
+
   if (status === "loading" || status === "unauthenticated") {
     return (
       <div className="auth-loading-screen">
@@ -323,51 +472,27 @@ export default function AiChef() {
         </Link>
 
         <div className="chef-nav-right">
-          {/* History Button */}
-          <button
-            className="chef-history-btn"
-            onClick={() => setHistoryOpen(true)}
-            title="View Recipe History"
-          >
+          <button className="chef-history-btn" onClick={() => setHistoryOpen(true)} title="View Recipe History">
             📖 History
-            {history.length > 0 && (
-              <span className="history-badge">{history.length}</span>
-            )}
+            {history.length > 0 && <span className="history-badge">{history.length}</span>}
           </button>
 
-          {/* Settings Button */}
-          <button
-            className="chef-history-btn"
-            onClick={() => setSettingsOpen(true)}
-            title="Settings"
-          >
+          <button className="chef-history-btn" onClick={() => setSettingsOpen(true)} title="Settings">
             ⚙️ Settings
           </button>
 
-          {/* Theme Toggle */}
-          <button
-            className="theme-toggle chef-nav-toggle"
-            aria-label="Toggle Dark/Light Mode"
-            onClick={toggleTheme}
-          >
+          <button className="theme-toggle chef-nav-toggle" aria-label="Toggle Dark/Light Mode" onClick={toggleTheme}>
             <span className="icon-sun">☀️</span>
             <span className="icon-moon">🌙</span>
           </button>
 
-          {/* User Avatar / Menu */}
           <div className="user-menu-wrap">
-            <button
-              className="user-avatar-btn"
-              onClick={() => setShowUserMenu((v) => !v)}
-              title={user?.name}
-            >
+            <button className="user-avatar-btn" onClick={() => setShowUserMenu((v) => !v)} title={user?.name}>
               {user?.image ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={user.image} alt={user.name} className="user-avatar-img" referrerPolicy="no-referrer" />
               ) : (
-                <span className="user-avatar-fallback">
-                  {user?.name?.[0]?.toUpperCase() || "U"}
-                </span>
+                <span className="user-avatar-fallback">{user?.name?.[0]?.toUpperCase() || "U"}</span>
               )}
             </button>
             {showUserMenu && (
@@ -394,9 +519,7 @@ export default function AiChef() {
 
       <main className="container">
         <header className="hero">
-          <h1>
-            Chefy<span className="text-gradient">.AI</span>
-          </h1>
+          <h1>Chefy<span className="text-gradient">.AI</span></h1>
           <p>From pixels to plates — extraordinary recipes crafted by AI, just for you.</p>
         </header>
 
@@ -404,16 +527,25 @@ export default function AiChef() {
           {/* Tab Controls */}
           <div className="tab-controls">
             <button
+              id="tab-image"
               className={`tab-btn ${activeTab === "image-tab" ? "active" : ""}`}
               onClick={() => switchTab("image-tab")}
             >
               📸 Upload Image
             </button>
             <button
+              id="tab-text"
               className={`tab-btn ${activeTab === "text-tab" ? "active" : ""}`}
               onClick={() => switchTab("text-tab")}
             >
               ✍️ Enter Ingredients
+            </button>
+            <button
+              id="tab-expiry"
+              className={`tab-btn ${activeTab === "expiry-tab" ? "active" : ""}`}
+              onClick={() => switchTab("expiry-tab")}
+            >
+              📅 Expiry Checker
             </button>
           </div>
 
@@ -444,13 +576,25 @@ export default function AiChef() {
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={previewSrc} alt="Recipe Image Preview" className="image-preview" />
               )}
+
+              {/* ── Remove Image Button ── */}
+              {previewSrc && (
+                <button
+                  id="remove-image-btn"
+                  className="remove-image-btn"
+                  onClick={handleRemoveImage}
+                  title="Remove image"
+                  aria-label="Remove uploaded image"
+                >
+                  🗑️
+                </button>
+              )}
             </div>
 
-            {imageLoading && statusMsg && (
-              <div className="status-banner">{statusMsg}</div>
-            )}
+            {imageLoading && statusMsg && <div className="status-banner">{statusMsg}</div>}
 
             <button
+              id="generate-image-btn"
               className={`generate-btn ${imageLoading ? "loading" : ""}`}
               onClick={handleGenerateImage}
               disabled={!currentFile || imageLoading}
@@ -472,16 +616,139 @@ export default function AiChef() {
               />
             </div>
 
-            {textLoading && statusMsg && (
-              <div className="status-banner">{statusMsg}</div>
-            )}
+            {textLoading && statusMsg && <div className="status-banner">{statusMsg}</div>}
 
             <button
+              id="generate-text-btn"
               className={`generate-btn ${textLoading ? "loading" : ""}`}
               onClick={handleGenerateText}
               disabled={textLoading}
             >
               <span className="btn-text">✨ Generate Recipe</span>
+              <div className="spinner"></div>
+            </button>
+          </div>
+
+          {/* ── Expiry Checker Tab ── */}
+          <div className={`tab-content ${activeTab === "expiry-tab" ? "active" : ""}`}>
+            <div className="expiry-hero">
+              <div className="expiry-hero-icon">📅</div>
+              <h2 className="expiry-hero-title">Ingredient Freshness Checker</h2>
+              <p className="expiry-hero-desc">
+                Add your ingredients with purchase details — our AI will calculate exactly how fresh they are and the best time to use them.
+              </p>
+            </div>
+
+            {/* ── Add Ingredient Form ── */}
+            <div className="expiry-form-card">
+              <h3 className="expiry-form-title">➕ Add Ingredient</h3>
+              <div className="expiry-form-grid">
+                <div className="expiry-form-field">
+                  <label className="expiry-form-label">Ingredient Name *</label>
+                  <input
+                    type="text"
+                    className="expiry-form-input"
+                    placeholder="e.g. Tomatoes, Chicken..."
+                    value={expiryForm.name}
+                    onChange={(e) => setExpiryForm((f) => ({ ...f, name: e.target.value }))}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddExpiryItem()}
+                  />
+                </div>
+                <div className="expiry-form-field">
+                  <label className="expiry-form-label">📅 Date of Purchase</label>
+                  <input
+                    type="date"
+                    className="expiry-form-input"
+                    value={expiryForm.purchaseDate}
+                    max={new Date().toISOString().split("T")[0]}
+                    onChange={(e) => setExpiryForm((f) => ({ ...f, purchaseDate: e.target.value }))}
+                  />
+                </div>
+                <div className="expiry-form-field">
+                  <label className="expiry-form-label">⚖️ Quantity</label>
+                  <input
+                    type="text"
+                    className="expiry-form-input"
+                    placeholder="e.g. 500g, 2 pieces, 1 litre"
+                    value={expiryForm.quantity}
+                    onChange={(e) => setExpiryForm((f) => ({ ...f, quantity: e.target.value }))}
+                  />
+                </div>
+                <div className="expiry-form-field">
+                  <label className="expiry-form-label">🏷️ Type</label>
+                  <select
+                    className="expiry-form-input expiry-form-select"
+                    value={expiryForm.type}
+                    onChange={(e) => setExpiryForm((f) => ({ ...f, type: e.target.value }))}
+                  >
+                    <option value="fresh">🌿 Fresh</option>
+                    <option value="frozen">🧊 Frozen</option>
+                    <option value="dried">🌾 Dried / Dehydrated</option>
+                    <option value="canned">🥫 Canned / Packaged</option>
+                    <option value="cooked">🍳 Cooked / Leftover</option>
+                  </select>
+                </div>
+              </div>
+              <button className="expiry-add-btn" onClick={handleAddExpiryItem}>
+                ➕ Add to List
+              </button>
+            </div>
+
+            {/* ── Added Ingredients List ── */}
+            {expiryItems.length > 0 && (
+              <div className="expiry-items-list">
+                <div className="expiry-items-list-header">
+                  <span>🧺 Your Ingredients <strong>({expiryItems.length})</strong></span>
+                  <button className="expiry-clear-all-btn" onClick={() => setExpiryItems([])}>✕ Clear All</button>
+                </div>
+                {expiryItems.map((item) => (
+                  <div key={item.id} className="expiry-item-row">
+                    <div className="expiry-item-info">
+                      <span className="expiry-item-name">{item.name}</span>
+                      <div className="expiry-item-meta">
+                        {item.purchaseDate && (
+                          <span className="expiry-item-tag">📅 {new Date(item.purchaseDate + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                        )}
+                        {item.quantity && <span className="expiry-item-tag">⚖️ {item.quantity}</span>}
+                        <span className={`expiry-item-type-badge type-${item.type}`}>
+                          {item.type === "fresh" ? "🌿 Fresh"
+                            : item.type === "frozen" ? "🧊 Frozen"
+                            : item.type === "dried" ? "🌾 Dried"
+                            : item.type === "canned" ? "🥫 Canned"
+                            : "🍳 Cooked"}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      className="expiry-item-remove"
+                      onClick={() => handleRemoveExpiryItem(item.id)}
+                      title="Remove ingredient"
+                    >✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {expiryLoading && expiryStatus && <div className="status-banner">{expiryStatus}</div>}
+
+            {expiryError && (
+              <div className="error-card glass-panel" style={{ marginTop: "1rem" }}>
+                <div className="error-icon">⚠️</div>
+                <div className="error-body">
+                  <h3>Could not fetch expiry info</h3>
+                  <p>{expiryError}</p>
+                  <button className="error-retry-btn" onClick={() => setExpiryError("")}>Dismiss</button>
+                </div>
+              </div>
+            )}
+
+            <button
+              id="check-expiry-btn"
+              className={`generate-btn expiry-btn ${expiryLoading ? "loading" : ""}`}
+              onClick={handleCheckExpiry}
+              disabled={expiryLoading || expiryItems.length === 0}
+            >
+              <span className="btn-text">🔍 Check Freshness</span>
               <div className="spinner"></div>
             </button>
           </div>
@@ -494,20 +761,14 @@ export default function AiChef() {
             <div className="error-body">
               <h3>Could not generate recipe</h3>
               <p>{errorMsg}</p>
-              <button className="error-retry-btn" onClick={() => setErrorMsg("")}>
-                Dismiss
-              </button>
+              <button className="error-retry-btn" onClick={() => setErrorMsg("")}>Dismiss</button>
             </div>
           </section>
         )}
 
         {/* ── Recipe Result ── */}
         {recipe && (
-          <section
-            key={recipeKey}
-            ref={recipeResultRef}
-            className="recipe-result glass-panel"
-          >
+          <section key={recipeKey} ref={recipeResultRef} className="recipe-result glass-panel">
             <div className="result-header">
               <h2 className="recipe-title-shimmer">✨ {recipe.title} ✨</h2>
             </div>
@@ -529,6 +790,111 @@ export default function AiChef() {
                 </ol>
               </div>
             </div>
+
+            {/* Nutrition Section */}
+            <NutritionCard nutrition={recipe.nutrition} />
+          </section>
+        )}
+
+        {/* ── Expiry Result ── */}
+        {expiryData && (
+          <section ref={expiryResultRef} className="expiry-result glass-panel">
+            <div className="result-header">
+              <h2 className="recipe-title-shimmer">📅 Freshness Report</h2>
+            </div>
+
+            {expiryData.summary && (
+              <div className="expiry-summary cascade-anim">
+                <span className="expiry-summary-icon">💡</span>
+                <p>{expiryData.summary}</p>
+              </div>
+            )}
+
+            <div className="expiry-items-grid cascade-anim delay-1">
+              {expiryData.items?.map((item, idx) => (
+                <div key={idx} className={`expiry-card ${expandedExpiry[idx] ? "expanded" : ""}`}>
+                  <div className="expiry-card-header" onClick={() => toggleExpiryItem(idx)}>
+                    <div className="expiry-card-left">
+                      <span className="expiry-cat-icon">{categoryIcon(item.category)}</span>
+                      <div>
+                        <h4 className="expiry-item-name">{item.name}</h4>
+                        <span className="expiry-category">{item.category}</span>
+                      </div>
+                    </div>
+                    <div className="expiry-card-right">
+                      <UrgencyBadge urgency={item.urgency} />
+                      <span className="expiry-chevron">{expandedExpiry[idx] ? "▲" : "▼"}</span>
+                    </div>
+                  </div>
+
+                  {expandedExpiry[idx] && (
+                    <div className="expiry-card-body">
+                      {/* Shelf life pills */}
+                      <div className="shelf-life-row">
+                        <div className="shelf-pill">
+                          <span className="shelf-pill-icon">🌡️</span>
+                          <div>
+                            <span className="shelf-pill-label">Room Temp</span>
+                            <span className="shelf-pill-val">{item.shelfLife?.roomTemp || "—"}</span>
+                          </div>
+                        </div>
+                        <div className="shelf-pill">
+                          <span className="shelf-pill-icon">❄️</span>
+                          <div>
+                            <span className="shelf-pill-label">Fridge</span>
+                            <span className="shelf-pill-val">{item.shelfLife?.fridge || "—"}</span>
+                          </div>
+                        </div>
+                        <div className="shelf-pill">
+                          <span className="shelf-pill-icon">🧊</span>
+                          <div>
+                            <span className="shelf-pill-label">Freezer</span>
+                            <span className="shelf-pill-val">{item.shelfLife?.freezer || "—"}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Remaining Life Banner */}
+                      {item.remainingLife && (
+                        <div className="expiry-remaining-row">
+                          <span className="expiry-remaining-icon">⏳</span>
+                          <span><strong>Time Remaining:</strong> {item.remainingLife}</span>
+                        </div>
+                      )}
+
+                      {item.storageMethod && (
+                        <div className="expiry-info-row">
+                          <span className="expiry-info-icon">📦</span>
+                          <div>
+                            <strong>Storage:</strong> {item.storageMethod}
+                          </div>
+                        </div>
+                      )}
+
+                      {item.usageTip && (
+                        <div className="expiry-info-row tip-row">
+                          <span className="expiry-info-icon">✅</span>
+                          <div>
+                            <strong>Usage Tip:</strong> {item.usageTip}
+                          </div>
+                        </div>
+                      )}
+
+                      {item.spoilageSigns && item.spoilageSigns.length > 0 && (
+                        <div className="spoilage-section">
+                          <strong className="spoilage-title">⚠️ Signs of Spoilage:</strong>
+                          <ul className="spoilage-list">
+                            {item.spoilageSigns.map((sign, si) => (
+                              <li key={si}>{sign}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </section>
         )}
       </main>
@@ -541,16 +907,11 @@ export default function AiChef() {
               <h2>📖 Recipe History</h2>
               <div className="history-header-actions">
                 {history.length > 0 && (
-                  <button className="history-clear-btn" onClick={handleClearHistory}>
-                    🗑️ Clear
-                  </button>
+                  <button className="history-clear-btn" onClick={handleClearHistory}>🗑️ Clear</button>
                 )}
-                <button className="history-close-btn" onClick={() => setHistoryOpen(false)}>
-                  ✕
-                </button>
+                <button className="history-close-btn" onClick={() => setHistoryOpen(false)}>✕</button>
               </div>
             </div>
-
             <div className="history-list">
               {history.length === 0 ? (
                 <div className="history-empty">
@@ -569,10 +930,7 @@ export default function AiChef() {
                     <p className="history-card-meta">
                       {entry.recipe.ingredients.length} ingredients · {entry.recipe.instructions.length} steps
                     </p>
-                    <button
-                      className="history-view-btn"
-                      onClick={() => handleViewHistoryRecipe(entry)}
-                    >
+                    <button className="history-view-btn" onClick={() => handleViewHistoryRecipe(entry)}>
                       View Recipe →
                     </button>
                   </div>
@@ -590,12 +948,9 @@ export default function AiChef() {
             <div className="history-drawer-header">
               <h2>⚙️ API Settings</h2>
               <div className="history-header-actions">
-                <button className="history-close-btn" onClick={() => setSettingsOpen(false)}>
-                  ✕
-                </button>
+                <button className="history-close-btn" onClick={() => setSettingsOpen(false)}>✕</button>
               </div>
             </div>
-
             <div className="history-list" style={{ padding: "1.5rem" }}>
               <h3 style={{ marginBottom: "1rem", fontSize: "1.1rem" }}>Custom API Key</h3>
               <p style={{ marginBottom: "0.75rem", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
@@ -609,7 +964,6 @@ export default function AiChef() {
                 🔵 <strong>Gemini</strong> (1,500 req/day): Get key at{" "}
                 <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>aistudio.google.com</a>
               </p>
-              
               <div className="input-area" style={{ marginTop: 0 }}>
                 <label htmlFor="custom-api-key">API Key</label>
                 <input
@@ -625,7 +979,6 @@ export default function AiChef() {
                   }}
                 />
               </div>
-              
               <div style={{ marginTop: "1rem", display: "flex", justifyContent: "flex-end" }}>
                 <button
                   className="generate-btn"
@@ -640,7 +993,6 @@ export default function AiChef() {
         </div>
       )}
 
-      {/* Click outside to close user menu */}
       {showUserMenu && (
         <div className="menu-backdrop" onClick={() => setShowUserMenu(false)} />
       )}

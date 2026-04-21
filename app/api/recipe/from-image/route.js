@@ -17,8 +17,8 @@ export async function POST(request) {
     const base64Image = Buffer.from(arrayBuffer).toString("base64");
     const mimeType = file.type || "image/jpeg";
 
-    const prompt = `Look at this food image and give me a recipe for what you see. Reply ONLY with JSON in this exact format:
-{"title":"Name","ingredients":["amount item",...],"instructions":["Step 1",...]}`;
+    const prompt = `Look at this food image and give me a recipe for what you see. Reply ONLY with JSON in this exact format (no extra text, no markdown):
+{"title":"Name","ingredients":["amount item",...],"instructions":["Step 1",...],"nutrition":{"calories":"approx kcal per serving","protein":"Xg","carbs":"Xg","fat":"Xg","fiber":"Xg","keyNutrients":["Vitamin C","Iron","Calcium"]}}`;
 
     const customKey = request.headers.get("x-custom-gemini-key");
 
