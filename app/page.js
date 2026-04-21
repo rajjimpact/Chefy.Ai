@@ -16,21 +16,22 @@ const features = [
     desc: "List your ingredients and let the AI suggest delicious, creative dishes you'd never have thought of.",
   },
   {
-    icon: "⚡",
-    title: "Instant Results",
-    desc: "Powered by cutting-edge vision and language models, get full recipes with steps in seconds.",
+    icon: "📅",
+    title: "Expiry Checker",
+    desc: "Add your ingredients with purchase dates and let AI calculate exactly how fresh they are with storage tips.",
   },
   {
-    icon: "🌙",
-    title: "Beautiful UI",
-    desc: "Enjoy a sleek dark/light interface with smooth animations, designed to feel premium and effortless.",
+    icon: "🗓️",
+    title: "AI Meal Planner",
+    desc: "Get a personalised weekly meal plan with breakfast, lunch & dinner — balanced for your dietary preference.",
   },
 ];
 
 const steps = [
-  { num: "01", title: "Choose Your Input", desc: "Upload a food image or type the ingredients you have." },
-  { num: "02", title: "AI Analyzes", desc: "Our AI vision model reads your image or ingredient list." },
-  { num: "03", title: "Get Your Recipe", desc: "Receive a full recipe — ingredients, steps, and more." },
+  { num: "01", title: "Sign In", desc: "Sign in with Google to access your personal cooking space and save recipes." },
+  { num: "02", title: "Choose Your Method", desc: "Upload a food photo, type ingredients, check freshness, or plan your week." },
+  { num: "03", title: "AI Analyzes", desc: "Our AI vision & language model processes your input in seconds." },
+  { num: "04", title: "Get Results", desc: "Receive full recipes with nutrition, freshness reports, or a weekly meal plan." },
 ];
 
 export default function LandingPage() {
@@ -108,8 +109,8 @@ export default function LandingPage() {
             <span className={styles.gradientText}>Culinary Masterpieces</span>
           </h1>
           <p className={styles.heroSubtitle}>
-            Snap a photo or list your ingredients — AI Chef crafts stunning,
-            personalized recipes in seconds. No more wasted groceries, no more boring meals.
+            Snap a photo or list your ingredients — Chefy.AI crafts stunning,
+            personalized recipes, checks your food freshness, and plans your full week's meals. Never waste groceries again.
           </p>
           <div className={styles.heroCtas}>
             <Link href="/chef" className={styles.primaryCta}>
@@ -120,7 +121,7 @@ export default function LandingPage() {
             </a>
           </div>
           <div className={styles.heroStats}>
-            <div className={styles.stat}><span className={styles.statNum}>2</span><span className={styles.statLabel}>Input Methods</span></div>
+            <div className={styles.stat}><span className={styles.statNum}>4</span><span className={styles.statLabel}>AI Features</span></div>
             <div className={styles.statDivider}></div>
             <div className={styles.stat}><span className={styles.statNum}>⚡</span><span className={styles.statLabel}>Instant Results</span></div>
             <div className={styles.statDivider}></div>
@@ -213,7 +214,7 @@ export default function LandingPage() {
 
       {/* ─── Footer ─── */}
       <footer className={styles.footer}>
-        <span>🍳 AI Chef — Powered by AI Vision &amp; Language Models</span>
+        <span>🍳 Chefy.AI — AI-Powered Cooking · Recipes · Meal Planning · Freshness Checking</span>
       </footer>
     </>
   );

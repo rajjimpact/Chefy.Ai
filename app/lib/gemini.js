@@ -1,77 +1,42 @@
 /**
- * AI API helper — supports BOTH Gemini and Groq keys.
+ * AI API helper — supports BOTH Gemini (Google) and Groq (Llama) keys.
  *
- * Key auto-detection:
- *   AIzaSy...  → Gemini API  (free: 1,500 req/day)
- *   gsk_...    → Groq API    (free: 14,400 req/day — much better!)
+ * Priority order:
+ *   1. Custom key from Settings panel (detected automatically as Gemini or Groq)
+ *   2. GROQ_API_KEY_1 / _2 / _3  (gsk_... keys)
+ *   3. GEMINI_API_KEY_1 / _2 / _3 (AIza... keys)
+ *
+ * Add to .env.local either:
+ *   GEMINI_API_KEY_1=AIza...   (Google AI Studio — free)
+ *   or
+ *   GROQ_API_KEY_1=gsk_...     (Groq — free)
  */
 
-// ── Gemini config ──────────────────────────────────────────────
-const GEMINI_MODELS = ["gemini-2.0-flash-lite", "gemini-2.0-flash"];
-
-// ── Groq config ────────────────────────────────────────────────
-const GROQ_TEXT_MODEL = "llama-3.3-70b-versatile";      // 14,400 RPD free
-
-// Groq vision models tried in order (image must come FIRST in content)
+// ── Groq model config ─────────────────────────────────────────────
+const GROQ_TEXT_MODEL = "llama-3.3-70b-versatile";
 const GROQ_VISION_MODELS = [
-  "meta-llama/llama-4-scout-17b-16e-instruct", // Llama 4 Scout — supports vision
-  "llama-3.2-90b-vision-preview",               // Llama 3.2 90B vision
-  "llama-3.2-11b-vision-preview",               // Llama 3.2 11B vision
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "llama-3.2-90b-vision-preview",
+  "llama-3.2-11b-vision-preview",
 ];
 
-// ── Utilities ──────────────────────────────────────────────────
+// ── Gemini model config ───────────────────────────────────────────
+const GEMINI_TEXT_MODEL   = "gemini-2.0-flash";
+const GEMINI_VISION_MODEL = "gemini-2.0-flash";
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-function getKeyType(key) {
-  if (!key || !key.trim()) return null;
-  if (key.trim().startsWith("AIzaSy")) return "gemini";
-  if (key.trim().startsWith("gsk_"))   return "groq";
-  return null;
-}
+// ─────────────────────────────────────────────────────────────────
+// GROQ helpers
+// ─────────────────────────────────────────────────────────────────
 
-// ── Gemini API ─────────────────────────────────────────────────
-
-async function callGeminiModel(key, model, body) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      cache: "no-store",
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) return { ok: true, data };
-    return { ok: false, status: res.status, message: data?.error?.message || `HTTP ${res.status}` };
-  } catch (err) {
-    return { ok: false, status: 0, message: err.message };
-  }
-}
-
-async function callGeminiKey(key, body) {
-  for (const model of GEMINI_MODELS) {
-    const r = await callGeminiModel(key, model, body);
-    if (r.ok) { console.log(`[AI] ✓ Gemini/${model}`); return r; }
-    console.warn(`[AI] Gemini/${model}: ${r.status} — ${String(r.message).slice(0,80)}`);
-    // Auth errors → stop trying models with this key
-    if (r.status === 401 || r.status === 403) return r;
-    if (r.status === 400 && /expired|invalid.?key/i.test(r.message || "")) return r;
-    // 404 / 429 → try next model
-  }
-  return { ok: false, status: 429, message: "All Gemini models quota-limited" };
-}
-
-// ── Groq API ───────────────────────────────────────────────────
-
-/** Convert Gemini-format request body → Groq (OpenAI) request body */
-function toGroqBody(body, visionModel = null) {
+function toGroqBody(body, model) {
   const parts    = body?.contents?.[0]?.parts || [];
   const textPart = parts.find((p) => p.text)?.text || "";
   const imgPart  = parts.find((p) => p.inlineData);
 
   if (imgPart) {
-    // ⚠️ Image MUST come first for Llama vision models
     return {
-      model: visionModel || GROQ_VISION_MODELS[0],
+      model,
       messages: [{
         role: "user",
         content: [
@@ -88,19 +53,17 @@ function toGroqBody(body, visionModel = null) {
   }
 
   return {
-    model: GROQ_TEXT_MODEL,
+    model,
     messages: [{ role: "user", content: textPart }],
   };
 }
 
 async function callGroqKey(key, body) {
-  const parts   = body?.contents?.[0]?.parts || [];
+  const parts    = body?.contents?.[0]?.parts || [];
   const hasImage = parts.some((p) => p.inlineData);
+  const models   = hasImage ? GROQ_VISION_MODELS : [GROQ_TEXT_MODEL];
 
-  // For vision, try each model in order; for text, just call once
-  const modelsToTry = hasImage ? GROQ_VISION_MODELS : [GROQ_TEXT_MODEL];
-
-  for (const model of modelsToTry) {
+  for (const model of models) {
     const groqBody = toGroqBody(body, model);
     try {
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -109,91 +72,174 @@ async function callGroqKey(key, body) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${key}`,
         },
-        body: JSON.stringify({ ...groqBody, temperature: 0.7, max_tokens: 1024 }),
+        body: JSON.stringify({
+          ...groqBody,
+          temperature: body?.generationConfig?.temperature ?? 0.7,
+          max_tokens:  body?.generationConfig?.maxOutputTokens ?? 2048,
+        }),
         cache: "no-store",
       });
 
       const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
         const msg = data?.error?.message || `HTTP ${res.status}`;
-        console.warn(`[AI] Groq/${model}: ${res.status} — ${String(msg).slice(0,80)}`);
-        // 404 = model not found → try next vision model
+        console.warn(`[Groq] ${model}: ${res.status} — ${String(msg).slice(0, 120)}`);
+        if (res.status === 401 || res.status === 403) {
+          return { ok: false, status: res.status, message: msg, authError: true };
+        }
         if (res.status === 404) continue;
-        // Auth errors → stop
-        if (res.status === 401 || res.status === 403) return { ok: false, status: res.status, message: msg };
-        // Other errors → try next model
+        if (res.status === 429) {
+          return { ok: false, status: 429, message: "Quota exceeded — rotating to next key" };
+        }
         continue;
       }
 
       const text = data.choices?.[0]?.message?.content || "";
-      console.log(`[AI] ✓ Groq/${model}`);
+      console.log(`[Groq] ✓ ${model}`);
       return {
         ok: true,
         data: { candidates: [{ content: { parts: [{ text }] } }] },
       };
+
     } catch (err) {
-      console.warn(`[AI] Groq/${model} error: ${err.message}`);
+      console.warn(`[Groq] ${model} network error: ${err.message}`);
       continue;
     }
   }
 
-  return { ok: false, status: 500, message: "All Groq vision models failed" };
+  return { ok: false, status: 500, message: "All Groq models failed for this key" };
 }
 
-// ── Main Export ────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// GEMINI helpers
+// ─────────────────────────────────────────────────────────────────
+
+async function callGeminiKey(key, body) {
+  const parts    = body?.contents?.[0]?.parts || [];
+  const hasImage = parts.some((p) => p.inlineData);
+  const model    = hasImage ? GEMINI_VISION_MODEL : GEMINI_TEXT_MODEL;
+
+  const url = `${GEMINI_BASE}/${model}:generateContent?key=${key}`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      const msg = data?.error?.message || `HTTP ${res.status}`;
+      console.warn(`[Gemini] ${model}: ${res.status} — ${String(msg).slice(0, 120)}`);
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, status: res.status, message: msg, authError: true };
+      }
+      if (res.status === 429) {
+        return { ok: false, status: 429, message: "Quota exceeded — rotating to next key" };
+      }
+      return { ok: false, status: res.status, message: msg };
+    }
+
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    console.log(`[Gemini] ✓ ${model}`);
+    return {
+      ok: true,
+      data: { candidates: [{ content: { parts: [{ text }] } }] },
+    };
+
+  } catch (err) {
+    console.warn(`[Gemini] network error: ${err.message}`);
+    return { ok: false, status: 500, message: err.message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Main export
+// ─────────────────────────────────────────────────────────────────
 
 /**
- * Try keys in order. Custom key goes first.
- * Supports both Gemini (AIzaSy...) and Groq (gsk_...) keys.
+ * Try all configured AI keys in order (custom → Groq pool → Gemini pool).
+ * Named callGeminiWithRotation for backwards-compatibility.
  */
 export async function callGeminiWithRotation(requestBody, customKey = null) {
-  const entries = [];
+  const groqKeys   = [];
+  const geminiKeys = [];
 
-  // Custom key (from Settings panel) — always first
+  // ── Custom key from Settings panel ──────────────────────────────
   if (customKey?.trim()) {
-    const type = getKeyType(customKey.trim());
-    if (type) entries.push({ key: customKey.trim(), type, label: "Custom" });
-    else console.warn("[AI] Custom key format not recognized — must start with AIzaSy or gsk_");
-  }
-
-  // Environment keys
-  const envPairs = [
-    [process.env.GROQ_API_KEY,      "Groq-Env"],
-    [process.env.GEMINI_API_KEY_1,  "Gemini-1"],
-    [process.env.GEMINI_API_KEY_2,  "Gemini-2"],
-    [process.env.GEMINI_API_KEY_3,  "Gemini-3"],
-  ];
-
-  for (const [k, label] of envPairs) {
-    if (!k?.trim()) continue;
-    const type = getKeyType(k.trim());
-    if (!type) continue;
-    if (!entries.some((e) => e.key === k.trim())) {
-      entries.push({ key: k.trim(), type, label });
+    const k = customKey.trim();
+    if (k.startsWith("gsk_")) {
+      groqKeys.push({ key: k, label: "Custom-Groq", provider: "groq" });
+    } else if (k.startsWith("AIza")) {
+      geminiKeys.push({ key: k, label: "Custom-Gemini", provider: "gemini" });
+    } else {
+      console.warn("[AI] Custom key ignored — must start with gsk_ (Groq) or AIza (Gemini)");
     }
   }
 
-  console.log(`[AI] Key order: [${entries.map((e) => `${e.label}(${e.type})`).join(", ")}]`);
+  // ── Pool: Groq ───────────────────────────────────────────────────
+  for (let i = 1; i <= 3; i++) {
+    const k = process.env[`GROQ_API_KEY_${i}`]?.trim();
+    if (!k) continue;
+    if (!k.startsWith("gsk_")) {
+      console.warn(`[Groq] Key ${i} skipped — must start with gsk_`);
+      continue;
+    }
+    if (!groqKeys.some((e) => e.key === k)) {
+      groqKeys.push({ key: k, label: `Groq-Key-${i}`, provider: "groq" });
+    }
+  }
 
-  if (entries.length === 0) {
+  // ── Pool: Gemini ─────────────────────────────────────────────────
+  for (let i = 1; i <= 3; i++) {
+    const k = process.env[`GEMINI_API_KEY_${i}`]?.trim();
+    if (!k) continue;
+    if (!k.startsWith("AIza")) {
+      console.warn(`[Gemini] Key ${i} skipped — must start with AIza`);
+      continue;
+    }
+    if (!geminiKeys.some((e) => e.key === k)) {
+      geminiKeys.push({ key: k, label: `Gemini-Key-${i}`, provider: "gemini" });
+    }
+  }
+
+  const allKeys = [...groqKeys, ...geminiKeys];
+
+  if (allKeys.length === 0) {
     throw new Error(
-      "No API keys configured. Get a FREE Groq key at console.groq.com → add to ⚙️ Settings."
+      "No API keys found. Add GEMINI_API_KEY_1 or GROQ_API_KEY_1 to .env.local"
     );
   }
 
-  for (const { key, type, label } of entries) {
-    console.log(`[AI] Trying ${label} (${type})...`);
-    const result = type === "groq"
-      ? await callGroqKey(key, requestBody)
-      : await callGeminiKey(key, requestBody);
+  console.log(`[AI] Rotation: [${allKeys.map((e) => e.label).join(" → ")}]`);
+
+  for (const { key, label, provider } of allKeys) {
+    console.log(`[AI] Trying ${label}...`);
+
+    const result =
+      provider === "groq"
+        ? await callGroqKey(key, requestBody)
+        : await callGeminiKey(key, requestBody);
 
     if (result.ok) return result.data;
 
-    console.warn(`[AI] ${label} failed: ${result.status} — ${String(result.message).slice(0,80)}`);
-    // Continue to next key
+    console.warn(
+      `[AI] ${label} failed: ${result.status} — ${String(result.message).slice(0, 100)}`
+    );
+
+    if (result.authError) {
+      throw new Error(
+        `Authentication failed for ${label}. Check your API key.`
+      );
+    }
+    // Otherwise rotate to next key
   }
 
   throw new Error(
-    "All API keys failed. Get a free Groq key at console.groq.com and paste it in ⚙️ Settings."
+    "All AI API keys are quota-exhausted or failed. Please add a fresh key in ⚙️ Settings, or wait for quota reset."
   );
 }

@@ -2172,4 +2172,168 @@ header p {
   .expiry-items-list-header { padding: 0.6rem 1rem; }
 }
 
+/* ══════════════════════════════════════════════
+   RECIPE ACTION BUTTONS (Print / Share)
+══════════════════════════════════════════════ */
+.recipe-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}
 
+.recipe-action-btn {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: var(--card-bg);
+  border: 1.5px solid var(--glass-border);
+  color: var(--text-main);
+  font-size: 0.92rem;
+  font-weight: 700;
+  padding: 0.75rem 1.25rem;
+  border-radius: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.recipe-action-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.recipe-action-btn.share-btn:hover {
+  border-color: #10b981;
+  color: #10b981;
+}
+
+/* ══════════════════════════════════════════════
+   MEAL PLANNER RESULTS — Meal Slots
+══════════════════════════════════════════════ */
+.meal-slot {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  padding: 1rem 1.1rem;
+}
+
+.meal-slot + .meal-slot {
+  margin-top: 0.6rem;
+}
+
+.meal-slot-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.meal-slot-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.meal-slot-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.meal-slot-cal {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.1);
+  border-radius: 20px;
+  padding: 0.15rem 0.55rem;
+  white-space: nowrap;
+}
+
+.meal-slot-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 0.25rem;
+  line-height: 1.3;
+}
+
+.meal-slot-desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 0.6rem;
+}
+
+.meal-slot-ings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.meal-ing-chip {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 20px;
+  padding: 0.2rem 0.6rem;
+  white-space: nowrap;
+}
+
+/* ══════════════════════════════════════════════
+   4-TAB LAYOUT FIXES
+══════════════════════════════════════════════ */
+
+/* On desktop — all 4 tabs in one row */
+.tab-controls {
+  flex-wrap: nowrap;
+}
+
+/* On tablet — wrap to 2×2 if needed */
+@media (max-width: 680px) {
+  .tab-controls {
+    flex-wrap: wrap;
+  }
+  .tab-btn {
+    flex: 1 1 40%;
+    min-width: 0;
+    font-size: 0.82rem;
+    padding: 0.7rem 0.4rem;
+  }
+}
+
+/* On mobile — 2×2 grid, smaller text */
+@media (max-width: 480px) {
+  .tab-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+    padding: 0.4rem;
+  }
+  .tab-btn {
+    font-size: 0.75rem;
+    padding: 0.6rem 0.3rem;
+    border-radius: 8px;
+    text-align: center;
+  }
+  .recipe-actions {
+    gap: 0.5rem;
+  }
+  .recipe-action-btn {
+    font-size: 0.85rem;
+    padding: 0.65rem 1rem;
+  }
+  .meal-slot-name {
+    font-size: 0.9rem;
+  }
+}
